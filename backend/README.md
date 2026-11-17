@@ -1,0 +1,27 @@
+# AYRATMA CORE local backend
+
+A Python-standard-library service intended for Termux and desktop Python. It provides a real SQLite memory store, task records, deterministic specialist-agent routing, and approval records.
+
+## Run in Termux
+
+```sh
+pkg update
+pkg install python
+cd ~/AYRATMA-SYSTEM/backend
+python server.py
+```
+
+The service binds to `127.0.0.1:8765` by default. It is local-only; do not expose it to the public internet. Database: `backend/data/ayratma.db` when started from this folder.
+
+## Endpoints
+
+- `GET /health` — service status
+- `GET /agents` — specialist registry
+- `GET /tasks` — recent planned tasks
+- `POST /tasks/plan` with `{"title":"..."}` — route a task to a specialist and store its plan
+- `GET /memory?q=...` — search saved notes
+- `POST /memory` with `{"body":"..."}` — save a note
+- `GET /approvals` — list approval records
+- `POST /approvals` with `{"title":"...","detail":"..."}` — create an approval request
+
+This backend is a functioning local foundation, not a generative AI model. Agent routing is currently deterministic and does not claim to learn or reason like an LLM. No shell execution, arbitrary file writes, root access, or Android security bypass is provided. A model runtime and authenticated cloud adapter are separate future integrations.
