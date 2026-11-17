@@ -87,6 +87,8 @@ private fun AyratmaApp() {
     var taskInput by remember { mutableStateOf("") }
     var memoryInput by remember { mutableStateOf("") }
     var approvalInput by remember { mutableStateOf("") }
+    var agentName by remember { mutableStateOf("") }
+    var agentRole by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var editorText by remember { mutableStateOf("") }
     var openedName by remember { mutableStateOf("Dosya seçilmedi") }
@@ -209,10 +211,20 @@ private fun AyratmaApp() {
                         PanelCard("Yanıt", chatOutput)
                     }
                     "Ajanlar" -> {
-                        PanelCard("Uzman ajan kataloğu", "Ajanlar aynı model altyapısını paylaşır; görev türüne göre yönlendirilir.")
+                        PanelCard("AI Agent Factory", "Yeni uzman ajan profilleri oluştur. Profiller SQLite'a kaydedilir ve katalogda kalıcı görünür; bunlar ayrı eğitilmiş modeller değil, CORE'un paylaştığı model için uzman rol tanımlarıdır.")
+                        EditField(agentName, { agentName = it }, "Ajan adı (örn. DESIGNER)")
+                        EditField(agentRole, { agentRole = it }, "Ajanın uzmanlık ve görev tanımı…", 3)
+                        ActionButton("Yeni ajan oluştur") {
+                            if (agentName.isNotBlank() && agentRole.isNotBlank() && !busy) {
+                                runApi("/agents", "POST", JSONObject().put("name", agentName).put("role", agentRole)) { result, error ->
+                                    info = if (result != null) "Ajan profili oluşturuldu." else "Ajan oluşturulamadı: $error"
+                                    if (result != null) { agentName = ""; agentRole = ""; refresh++ }
+                                }
+                            }
+                        }
+                        PanelCard("Yerleşik uzmanlar", "ANALYST • ENGINEER • GUARD • RESEARCHER • ANDROID_EXPERT • DEBUGGER")
                         if (agents.isEmpty()) PanelCard("Bağlantı gerekli", "CORE başlatıldığında ajan kataloğu burada görünür.")
                         agents.forEach { (name, role) -> PanelCard(name, role) }
-                        listOf("ANALYST", "ENGINEER", "GUARD", "RESEARCHER", "ANDROID_EXPERT", "DEBUGGER").filter { name -> agents.none { it.first == name } }.forEach { PanelCard(it, "CORE bağlantısı bekleniyor.") }
                     }
                     "Hafıza" -> {
                         EditField(memoryInput, { memoryInput = it }, "CORE hafızasına not ekle…", 2)
