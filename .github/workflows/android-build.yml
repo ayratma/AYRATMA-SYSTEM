@@ -49,6 +49,15 @@ jobs:
           java -version
           gradle --version
 
+      - name: Set up Python backend checks
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Test AYRATMA CORE backend
+        working-directory: backend
+        run: python -m unittest smoke_test.py -v
+
       - name: Build debug APK
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
