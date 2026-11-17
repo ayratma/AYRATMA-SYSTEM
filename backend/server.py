@@ -6,6 +6,7 @@ from urllib.parse import urlparse, parse_qs
 from ayratma_core import __version__
 from ayratma_core.store import Store
 from ayratma_core.agents import AGENTS, plan_task
+from ayratma_core.model import chat as model_chat, ModelUnavailable
 
 store = Store(os.environ.get('AYRATMA_DB', 'data/ayratma.db'))
 MAX_BODY = 64 * 1024
@@ -45,6 +46,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             data = self.read_json()
+            if self.path == '/chat':
+                prompt = str(data.get('message', '')).strip()
+                if not prompt or len(prompt) > 12000:
+                    return self.send_json(400, {'error': 'message_required_max_12000'})
+                agent = plan_task(prompt)['agent']
+                system = 'You are AYRATMA CORE. The active specialist is ' + agent + '. Be accurate, explain uncertainty, and ask before consequential actions.'
+                try:
+                    answer = model_chat([{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}])
+                    store.event('chat.completed', 'agent=' + agent)
+                    return self.send_json(200, {'agent': agent, 'answer': answer, 'model': 'local'})
+                except ModelUnavailable as exc:
+                    return self.send_json(503, {'error': str(exc), 'hint': 'Start a local llama.cpp server on 127.0.0.1:8080 with an OpenAI-compatible /v1/chat/completions endpoint.'})
             if self.path == '/memory':
                 body = str(data.get('body', '')).strip()
                 if not body or len(body) > 10000: return self.send_json(400, {'error': 'body_required_max_10000'})
