@@ -6,6 +6,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.StatFs
 import android.provider.OpenableColumns
 import androidx.activity.ComponentActivity
@@ -96,7 +98,7 @@ private fun AyratmaApp() {
         thread {
             try {
                 val result = CoreApi.request(path, method, body)
-                runOnUiThread {
+                Handler(Looper.getMainLooper()).post {
                     busy = false
                     if (result.optInt("_http", 200) >= 400) done(null, result.optString("error", "HTTP " + result.optInt("_http")))
                     else done(result, null)
