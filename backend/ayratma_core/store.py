@@ -8,12 +8,13 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
-            db.executescript('''
+            db.executescript("""
             CREATE TABLE IF NOT EXISTS memory(id INTEGER PRIMARY KEY, body TEXT NOT NULL, created_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS tasks(id INTEGER PRIMARY KEY, title TEXT NOT NULL, agent TEXT NOT NULL, status TEXT NOT NULL, result TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS approvals(id INTEGER PRIMARY KEY, title TEXT NOT NULL, detail TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, detail TEXT NOT NULL, created_at INTEGER NOT NULL);
-            ''')
+            CREATE TABLE IF NOT EXISTS custom_agents(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, role TEXT NOT NULL, created_at INTEGER NOT NULL);
+            """)
     def connect(self):
         db = sqlite3.connect(self.path)
         db.row_factory = sqlite3.Row
@@ -42,6 +43,13 @@ class Store:
     def approvals(self):
         with self.connect() as db:
             return [dict(r) for r in db.execute('SELECT * FROM approvals ORDER BY id DESC LIMIT 100')]
+    def add_agent(self, name: str, role: str) -> int:
+        with self.connect() as db:
+            cur = db.execute('INSERT INTO custom_agents(name,role,created_at) VALUES(?,?,?)', (name, role, int(time.time())))
+            return int(cur.lastrowid)
+    def custom_agents(self):
+        with self.connect() as db:
+            return [dict(r) for r in db.execute('SELECT * FROM custom_agents ORDER BY id DESC LIMIT 500')]
     def event(self, kind: str, detail: str):
         with self.connect() as db:
             db.execute('INSERT INTO events(kind,detail,created_at) VALUES(?,?,?)', (kind, detail[:2000], int(time.time())))
