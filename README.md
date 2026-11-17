@@ -1,19 +1,31 @@
 # AYRATMA SYSTEM
 
-Android application foundation using Kotlin and Jetpack Compose.
+Native Android application foundation (Kotlin + Jetpack Compose) plus a separate local AYRATMA CORE backend (Python standard library).
 
-## Current build
-- Native Android application with a dark dashboard.
-- Module navigation and honest placeholder screens.
-- GitHub Actions workflow builds a debug APK.
-- Package: `com.ayratma.system`.
-- Minimum Android: 8.0 (API 26).
+## Android app
+- Package: `com.ayratma.system`
+- Minimum Android: API 26
+- Current Android UI includes local SQLite notes/tasks, user-selected text-file open/save, and device RAM/storage information.
+- AI model inference is not yet integrated into the Android app.
 
-## Status
-This is the first installable application shell. CORE AI, local model runtime, SQLite memory, cloud services, and device integrations are not connected yet.
+## AYRATMA CORE backend
+See [backend/README.md](backend/README.md). The Termux-compatible backend currently provides:
+- SQLite persistence for memory, planned tasks, approval records, and events.
+- Specialist registry: ANALYST, ENGINEER, GUARD, RESEARCHER, ANDROID_EXPERT, DEBUGGER.
+- Deterministic task routing and plan generation.
+- Local HTTP endpoints for health, agents, tasks, memory, and approvals.
+- Python smoke tests run by GitHub Actions.
+
+Run from Termux:
+```sh
+cd ~/AYRATMA-SYSTEM/backend
+python server.py
+```
+
+The server binds to `127.0.0.1:8765` by default and is intended for local use only.
+
+## Not yet integrated
+The current specialist router is rule-based, not a generative AI. A local GGUF/llama.cpp runtime, online model provider, Android-to-backend connection, autonomous agent execution, web research connector, cloud deployment, and self-update engine remain future work. The backend does not execute shell commands or make unrestricted file/system changes.
 
 ## Build
-Pushes to `main` or a manual run in Actions build the debug APK. Download the artifact named `AYRATMA-SYSTEM-debug-apk`.
-
-## Safety
-Future device operations use Android-supported APIs, user-selected Storage Access Framework locations, explicit approval for sensitive actions, sandboxing, and audit logs. No root escalation or security bypass is included.
+Pushes to `main` or a manual GitHub Actions run build a debug APK. The workflow also runs backend smoke tests and uploads the APK artifact.
