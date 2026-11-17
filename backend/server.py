@@ -1,6 +1,8 @@
 from __future__ import annotations
 import json
 import os
+import re
+import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from ayratma_core import __version__
@@ -34,7 +36,7 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == '/health':
             return self.send_json(200, {'ok': True, 'service': 'AYRATMA CORE', 'version': __version__})
         if parsed.path == '/agents':
-            return self.send_json(200, {'agents': [{'id': k, **v} for k, v in AGENTS.items()]})
+            return self.send_json(200, {'agents': [{'id': k, **v, 'kind': 'built_in'} for k, v in AGENTS.items()] + [{'id': a['name'], 'role': a['role'], 'kind': 'custom'} for a in store.custom_agents()]})
         if parsed.path == '/tasks':
             return self.send_json(200, {'tasks': store.tasks()})
         if parsed.path == '/memory':
@@ -58,6 +60,19 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(200, {'agent': agent, 'answer': answer, 'model': 'local'})
                 except ModelUnavailable as exc:
                     return self.send_json(503, {'error': str(exc), 'hint': 'Start a local llama.cpp server on 127.0.0.1:8080 with an OpenAI-compatible /v1/chat/completions endpoint.'})
+            if self.path == '/agents':
+                name = str(data.get('name', '')).strip()
+                role = str(data.get('role', '')).strip()
+                if not re.fullmatch(r'[A-Za-z0-9 _-]{2,32}', name):
+                    return self.send_json(400, {'error': 'agent_name_must_be_2_to_32_safe_characters'})
+                if not role or len(role) > 1000:
+                    return self.send_json(400, {'error': 'agent_role_required_max_1000'})
+                try:
+                    agent_id = store.add_agent(name, role)
+                except sqlite3.IntegrityError:
+                    return self.send_json(409, {'error': 'agent_name_already_exists'})
+                store.event('agent.created', 'id=' + str(agent_id) + ';name=' + name)
+                return self.send_json(201, {'id': agent_id, 'name': name, 'role': role, 'created': True})
             if self.path == '/memory':
                 body = str(data.get('body', '')).strip()
                 if not body or len(body) > 10000: return self.send_json(400, {'error': 'body_required_max_10000'})
