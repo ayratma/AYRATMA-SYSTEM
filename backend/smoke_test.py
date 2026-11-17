@@ -4,6 +4,8 @@ import tempfile
 import unittest
 from ayratma_core.store import Store
 from ayratma_core.agents import route_task, plan_task
+from ayratma_core.model import chat, ModelUnavailable
+from unittest.mock import patch
 
 class CoreTests(unittest.TestCase):
     def setUp(self):
@@ -17,6 +19,10 @@ class CoreTests(unittest.TestCase):
     def test_agent_routing(self):
         self.assertEqual(route_task('Android APK build hata'), 'ANDROID_EXPERT')
         self.assertEqual(plan_task('kod yaz')['execution'], 'plan_only')
+    def test_model_adapter_rejects_remote_endpoint(self):
+        with patch.dict(os.environ, {'AYRATMA_MODEL_ENDPOINT': 'https://example.com/v1/chat/completions'}):
+            with self.assertRaises(ModelUnavailable):
+                chat([{'role': 'user', 'content': 'hello'}])
     def test_task_persistence(self):
         task_id = self.store.add_task('test task', 'ANALYST', json.dumps({'ok': True}))
         self.assertEqual(self.store.tasks()[0]['id'], task_id)
