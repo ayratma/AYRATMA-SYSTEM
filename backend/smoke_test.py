@@ -23,6 +23,10 @@ class CoreTests(unittest.TestCase):
         with patch.dict(os.environ, {'AYRATMA_MODEL_ENDPOINT': 'https://example.com/v1/chat/completions'}):
             with self.assertRaises(ModelUnavailable):
                 chat([{'role': 'user', 'content': 'hello'}])
+    def test_custom_agent_factory_persistence(self):
+        agent_id = self.store.add_agent('DESIGNER', 'Plans accessible interface layouts')
+        self.assertEqual(self.store.custom_agents()[0]['id'], agent_id)
+        self.assertEqual(self.store.custom_agents()[0]['name'], 'DESIGNER')
     def test_task_persistence(self):
         task_id = self.store.add_task('test task', 'ANALYST', json.dumps({'ok': True}))
         self.assertEqual(self.store.tasks()[0]['id'], task_id)
