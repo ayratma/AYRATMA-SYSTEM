@@ -56,7 +56,7 @@ jobs:
 
       - name: Test AYRATMA CORE backend
         working-directory: backend
-        run: python -m unittest smoke_test.py -v
+        run: python smoke_test.py -v
 
       - name: Build debug APK
         run: gradle --no-daemon --stacktrace :app:assembleDebug
