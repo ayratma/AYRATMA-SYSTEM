@@ -15,7 +15,8 @@ The service binds to `127.0.0.1:8765` by default. It is local-only; do not expos
 
 ## Endpoints
 
-- `POST /chat` with `{"message":"..."}` — send a prompt to a local OpenAI-compatible llama.cpp server\n- `GET /health` — service status
+- `POST /chat` with `{"message":"..."}` — send a prompt to a local OpenAI-compatible llama.cpp server
+- `GET /health` — service status
 - `GET /agents` — specialist registry
 - `GET /tasks` — recent planned tasks
 - `POST /tasks/plan` with `{"title":"..."}` — route a task to a specialist and store its plan
