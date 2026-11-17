@@ -12,165 +12,283 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import kotlin.concurrent.thread
 
 private val Bg = Color(0xFF080B12)
 private val Panel = Color(0xFF121927)
 private val Mint = Color(0xFF69D5C5)
 private val Muted = Color(0xFF9AA8BC)
+private val Pages = listOf("Genel Bakış", "CORE AI", "Ajanlar", "Hafıza", "Görevler", "Dosya Merkezi", "Sistem", "Onaylar", "Evolution", "Cloud", "Proje Merkezi")
 
 class MainActivity : ComponentActivity() {
-    private lateinit var db: LocalStore
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        db = LocalStore(this)
-        setContent { AyratmaApp(db) }
+        setContent { AyratmaApp() }
     }
 }
 
-private class LocalStore(context: Context) : android.database.sqlite.SQLiteOpenHelper(context, "ayratma.db", null, 1) {
-    override fun onCreate(db: android.database.sqlite.SQLiteDatabase) {
-        db.execSQL("CREATE TABLE memory(id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, created_at INTEGER NOT NULL)")
-        db.execSQL("CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL)")
-        db.execSQL("CREATE TABLE approvals(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, detail TEXT NOT NULL, status TEXT NOT NULL, created_at INTEGER NOT NULL)")
-    }
-    override fun onUpgrade(db: android.database.sqlite.SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
-    fun add(table: String, title: String, detail: String = "") {
-        val values = android.content.ContentValues().apply {
-            if (table == "memory") { put("body", title); put("created_at", System.currentTimeMillis()) }
-            else if (table == "tasks") { put("title", title); put("status", "Bekliyor"); put("created_at", System.currentTimeMillis()) }
-            else { put("title", title); put("detail", detail); put("status", "Onay bekliyor"); put("created_at", System.currentTimeMillis()) }
+private object CoreApi {
+    private const val BASE = "http://127.0.0.1:8765"
+    fun request(path: String, method: String = "GET", body: JSONObject? = null): JSONObject {
+        val conn = (URL(BASE + path).openConnection() as HttpURLConnection)
+        conn.requestMethod = method
+        conn.connectTimeout = 2500
+        conn.readTimeout = 90000
+        conn.setRequestProperty("Accept", "application/json")
+        if (body != null) {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
         }
-        writableDatabase.insert(table, null, values)
-    }
-    fun rows(table: String): List<String> {
-        val column = if (table == "memory") "body" else "title"
-        val result = mutableListOf<String>()
-        readableDatabase.rawQuery("SELECT $column FROM $table ORDER BY id DESC LIMIT 50", null).use { c ->
-            while (c.moveToNext()) result.add(c.getString(0))
-        }
-        return result
+        try {
+            val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() } ?: "{}"
+            return JSONObject(text).put("_http", conn.responseCode)
+        } finally { conn.disconnect() }
     }
 }
 
 @Composable
-private fun AyratmaApp(db: LocalStore) {
-    var page by remember { mutableStateOf("Kontrol Merkezi") }
-    var memoryInput by remember { mutableStateOf("") }
+private fun AyratmaApp() {
+    val context = LocalContext.current
+    var page by remember { mutableStateOf(Pages[0]) }
+    var status by remember { mutableStateOf("CORE bağlantısı kontrol ediliyor…") }
+    var connected by remember { mutableStateOf(false) }
+    var agents by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+    var tasks by remember { mutableStateOf(listOf<String>()) }
+    var memory by remember { mutableStateOf(listOf<String>()) }
+    var approvals by remember { mutableStateOf(listOf<String>()) }
+    var chatInput by remember { mutableStateOf("") }
+    var chatOutput by remember { mutableStateOf("AYRATMA CORE'a mesaj gönder. Yerel model çalışmıyorsa bağlantı hatası gösterilir.") }
     var taskInput by remember { mutableStateOf("") }
+    var memoryInput by remember { mutableStateOf("") }
+    var approvalInput by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
     var editorText by remember { mutableStateOf("") }
-    var openedName by remember { mutableStateOf("Henüz dosya seçilmedi") }
+    var openedName by remember { mutableStateOf("Dosya seçilmedi") }
     var info by remember { mutableStateOf("Hazır") }
     var refresh by remember { mutableIntStateOf(0) }
-    val ctx = androidx.compose.ui.platform.LocalContext.current
+
+    fun runApi(path: String, method: String = "GET", body: JSONObject? = null, done: (JSONObject?, String?) -> Unit) {
+        busy = true
+        thread {
+            try {
+                val result = CoreApi.request(path, method, body)
+                runOnUiThread {
+                    busy = false
+                    if (result.optInt("_http", 200) >= 400) done(null, result.optString("error", "HTTP " + result.optInt("_http")))
+                    else done(result, null)
+                }
+            } catch (e: Exception) {
+                runOnUiThread { busy = false; done(null, e.message ?: "CORE bağlantısı yok") }
+            }
+        }
+    }
+
+    fun refreshCore() {
+        runApi("/health") { result, error ->
+            connected = result != null
+            status = if (result != null) "CORE bağlı • sürüm " + result.optString("version") else "CORE çevrimdışı • Termux backend başlatılmalı"
+        }
+        runApi("/agents") { result, _ ->
+            if (result != null) {
+                val arr = result.optJSONArray("agents") ?: JSONArray()
+                agents = (0 until arr.length()).map { i ->
+                    val a = arr.getJSONObject(i)
+                    a.optString("id") to a.optJSONObject("role")?.toString().orEmpty().ifBlank { a.optString("role") }
+                }
+            }
+        }
+        runApi("/tasks") { result, _ ->
+            if (result != null) {
+                val arr = result.optJSONArray("tasks") ?: JSONArray()
+                tasks = (0 until arr.length()).map { i -> arr.optJSONObject(i)?.toString() ?: arr.optString(i) }
+            }
+        }
+        runApi("/memory") { result, _ ->
+            if (result != null) {
+                val arr = result.optJSONArray("memory") ?: JSONArray()
+                memory = (0 until arr.length()).map { i -> arr.optJSONObject(i)?.toString() ?: arr.optString(i) }
+            }
+        }
+        runApi("/approvals") { result, _ ->
+            if (result != null) {
+                val arr = result.optJSONArray("approvals") ?: JSONArray()
+                approvals = (0 until arr.length()).map { i -> arr.optJSONObject(i)?.toString() ?: arr.optString(i) }
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) { refreshCore() }
+    LaunchedEffect(refresh) { if (refresh > 0) refreshCore() }
 
     val openFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri != null) {
-            try {
-                ctx.contentResolver.openInputStream(uri)?.bufferedReader()?.use { editorText = it.readText() }
-                openedName = queryName(ctx, uri)
-                info = "Dosya okundu. Düzenleyip Kaydet ile yeni dosya oluşturabilirsin."
-            } catch (e: Exception) { info = "Dosya okunamadı: ${e.message}" }
-        }
+        if (uri != null) try {
+            context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { editorText = it.readText() }
+            openedName = queryName(context, uri)
+            info = "Dosya okundu. Düzenleyip yeni dosya olarak kaydedebilirsin."
+        } catch (e: Exception) { info = "Okuma hatası: ${e.message}" }
     }
     val saveFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri: Uri? ->
         if (uri != null) try {
-            ctx.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(editorText) }
+            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(editorText) }
             info = "Dosya kaydedildi."
         } catch (e: Exception) { info = "Kaydetme hatası: ${e.message}" }
     }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Mint, background = Bg, surface = Panel, onSurface = Color.White)) {
-        Surface(Modifier.fillMaxSize(), color = Bg) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Column {
-                        Text("AYRATMA", color = Mint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Text("SYSTEM", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold)
+        Row(Modifier.fillMaxSize().background(Bg)) {
+            Column(Modifier.width(104.dp).fillMaxHeight().background(Color(0xFF0D1420)).verticalScroll(rememberScrollState()).padding(7.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("AYRATMA", color = Mint, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, modifier = Modifier.padding(vertical = 12.dp, horizontal = 4.dp))
+                Pages.forEach { label ->
+                    val selected = page == label
+                    TextButton(onClick = { page = label }, modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 5.dp, vertical = 8.dp), colors = ButtonDefaults.textButtonColors(contentColor = if (selected) Mint else Muted)) {
+                        Text(label, fontSize = 10.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, lineHeight = 12.sp)
                     }
-                    Text("v0.2.0", color = Muted)
                 }
-                Text("Yerel kontrol merkezi • ${Build.MODEL}", color = Muted, fontSize = 12.sp)
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Kontrol Merkezi", "CORE AI", "Uzman Ajanlar", "Hafıza", "Dosya / Kod", "Sistem İzleme", "Görevler", "Onay Merkezi", "Evolution Engine", "Cloud").chunked(2).forEach { pair ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            pair.forEach { label ->
-                                OutlinedButton(onClick = { page = label }, modifier = Modifier.weight(1f), contentPadding = PaddingValues(8.dp)) {
-                                    Text(label, fontSize = 11.sp, maxLines = 1)
-                                }
-                            }
-                            if (pair.size == 1) Spacer(Modifier.weight(1f))
-                        }
+            }
+            Column(Modifier.weight(1f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column {
+                        Text("SYSTEM", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold)
+                        Text(page, color = Mint, fontSize = 12.sp)
                     }
+                    Text(if (connected) "● CORE" else "○ CORE", color = if (connected) Mint else Color(0xFFFFB86B), fontSize = 10.sp)
                 }
                 when (page) {
-                    "Kontrol Merkezi" -> {
-                        PanelCard("Sistem durumu", "Uygulama ve yerel SQLite hafızası aktif. AI modeli henüz bağlanmadı.")
-                        PanelCard("Çalışan yerel özellikler", "Dosya seçme/okuma • metin düzenleme/kaydetme • kalıcı notlar • görev listesi • cihaz bilgileri")
-                        PanelCard("Güvenlik", "Dosyalar yalnızca Android dosya seçicisiyle senin seçtiğin konumdan açılır. Kod otomatik çalıştırılmaz. Kritik işlemler onay gerektirir.")
+                    "Genel Bakış" -> {
+                        PanelCard("AYRATMA CORE", status)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MetricCard("Ajan", agents.size.toString(), Modifier.weight(1f))
+                            MetricCard("Görev", tasks.size.toString(), Modifier.weight(1f))
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            MetricCard("Hafıza", memory.size.toString(), Modifier.weight(1f))
+                            MetricCard("Onay", approvals.size.toString(), Modifier.weight(1f))
+                        }
+                        PanelCard("Çalışma mimarisi", "Tek bir model yönlendiricisi + uzman ajan tanımları + araçlar + kalıcı hafıza. Yeni ajanlar katalog üzerinden eklenebilir; binlerce ayrı model indirilmez.")
+                        ActionButton("Durumu yenile") { refresh++ }
+                        PanelCard("Güvenlik", "Root yok. Dosya erişimi Android dosya seçicisiyle. Kritik işlemler onay gerektirir; uygulama gizli komut çalıştırmaz.")
                     }
                     "CORE AI" -> {
-                        PanelCard("AYRATMA CORE", "Orkestrasyon arayüzü hazır; gerçek yanıt üretimi için yerel model veya yapılandırılmış bir AI sağlayıcısı gerekiyor.")
-                        PanelCard("Çalışma modu", "Çevrimdışı: model kurulana kadar kullanılamaz. Çevrimiçi: sağlayıcı bağlantısı henüz yapılandırılmadı.")
-                        Text("API anahtarını bu ekrana veya sohbete yazma. Güvenli sağlayıcı ayarları ayrı bir aşamada eklenecek.", color = Muted, fontSize = 12.sp)
+                        PanelCard("AYRATMA CORE CHAT", "Mesajlar Termux'ta çalışan yerel CORE API'ye gider. LLM için ayrıca localhost:8080 üzerinde llama.cpp sunucusu açık olmalıdır.")
+                        EditField(chatInput, { chatInput = it }, "CORE'a mesajını yaz…", 3)
+                        ActionButton(if (busy) "İşleniyor…" else "Gönder") {
+                            if (chatInput.isNotBlank() && !busy) {
+                                val prompt = chatInput
+                                chatOutput = "Yanıt bekleniyor…"
+                                runApi("/chat", "POST", JSONObject().put("message", prompt)) { result, error ->
+                                    chatOutput = if (result != null) "[" + result.optString("agent") + "] " + result.optString("answer") else "CORE yanıt veremedi: " + error
+                                }
+                            }
+                        }
+                        PanelCard("Yanıt", chatOutput)
                     }
-                    "Uzman Ajanlar" -> {
-                        PanelCard("ANALYST", "Analiz ve planlama ajanı — model bağlantısı bekliyor.")
-                        PanelCard("ENGINEER", "Kod inceleme ve geliştirme ajanı — model bağlantısı bekliyor.")
-                        PanelCard("GUARD", "İzin, güvenlik ve işlem denetimi ajanı — temel onay kayıtları yerel olarak tutuluyor.")
+                    "Ajanlar" -> {
+                        PanelCard("Uzman ajan kataloğu", "Ajanlar aynı model altyapısını paylaşır; görev türüne göre yönlendirilir.")
+                        if (agents.isEmpty()) PanelCard("Bağlantı gerekli", "CORE başlatıldığında ajan kataloğu burada görünür.")
+                        agents.forEach { (name, role) -> PanelCard(name, role) }
+                        listOf("ANALYST", "ENGINEER", "GUARD", "RESEARCHER", "ANDROID_EXPERT", "DEBUGGER").filter { name -> agents.none { it.first == name } }.forEach { PanelCard(it, "CORE bağlantısı bekleniyor.") }
                     }
                     "Hafıza" -> {
-                        Text("Kalıcı yerel notlar (SQLite)", color = Mint, fontWeight = FontWeight.Bold)
-                        EditField(memoryInput, { memoryInput = it }, "Hatırlanacak not...")
-                        Button(onClick = { if (memoryInput.isNotBlank()) { db.add("memory", memoryInput); memoryInput = ""; refresh++ } }, modifier = Modifier.fillMaxWidth()) { Text("Hafızaya kaydet") }
-                        Text("Kayıtlar", color = Muted)
-                        db.rows("memory").forEach { PanelCard("Kayıt", it) }
+                        EditField(memoryInput, { memoryInput = it }, "CORE hafızasına not ekle…", 2)
+                        ActionButton("Hafızaya kaydet") {
+                            if (memoryInput.isNotBlank() && !busy) runApi("/memory", "POST", JSONObject().put("body", memoryInput)) { result, error ->
+                                info = if (result != null) "Hafızaya kaydedildi." else "Kaydedilemedi: $error"
+                                if (result != null) { memoryInput = ""; refresh++ }
+                            }
+                        }
+                        memory.forEach { PanelCard("Hafıza kaydı", it) }
+                        if (memory.isEmpty()) PanelCard("Kayıt yok", "CORE veritabanında henüz kayıt bulunmuyor.")
                     }
-                    "Dosya / Kod" -> {
-                        PanelCard("Dosya erişimi", "Android sistem dosya seçicisi kullanılır. Uygulama tüm dosyalarına gizlice erişmez.")
+                    "Görevler" -> {
+                        EditField(taskInput, { taskInput = it }, "Yeni görev tanımı…", 2)
+                        ActionButton("Görevi planla") {
+                            if (taskInput.isNotBlank() && !busy) runApi("/tasks/plan", "POST", JSONObject().put("title", taskInput)) { result, error ->
+                                info = if (result != null) "Görev planı oluşturuldu." else "Plan oluşturulamadı: $error"
+                                if (result != null) { taskInput = ""; refresh++ }
+                            }
+                        }
+                        tasks.forEach { PanelCard("Görev kaydı", it) }
+                        if (tasks.isEmpty()) PanelCard("Görev bulunamadı", "Yeni görev ekleyerek CORE planlayıcısını kullan.")
+                    }
+                    "Dosya Merkezi" -> {
+                        PanelCard("SAF dosya erişimi", "Sadece Android dosya seçicisinden senin seçtiğin dosyaları açar. Tüm depolama izni istemez.")
                         Text(openedName, color = Mint, fontSize = 12.sp)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { openFile.launch(arrayOf("text/*", "application/json", "application/xml")) }, modifier = Modifier.weight(1f)) { Text("Dosya aç") }
-                            OutlinedButton(onClick = { saveFile.launch("ayratma-notes.txt") }, modifier = Modifier.weight(1f)) { Text("Yeni dosya kaydet") }
+                            ActionButton("Dosya aç", Modifier.weight(1f)) { openFile.launch(arrayOf("text/*", "application/json", "application/xml")) }
+                            OutlinedButton(onClick = { saveFile.launch("ayratma-output.txt") }, modifier = Modifier.weight(1f)) { Text("Yeni dosya kaydet", fontSize = 11.sp) }
                         }
-                        EditField(editorText, { editorText = it }, "Dosya içeriği / kod...", minLines = 10)
-                        Text("Not: Kaydetme, seçtiğin hedefe yeni dosya yazar; orijinal dosyanın üzerine yazma sonraki güvenli sürümde eklenecek.", color = Muted, fontSize = 11.sp)
+                        EditField(editorText, { editorText = it }, "Dosya içeriği / kod…", 12)
+                        PanelCard("Güvenli düzenleme", "Bu sürüm dosyayı açıp yeni hedefe kaydeder. Orijinal dosyayı değiştirme ve kod çalıştırma otomasyonu kapalıdır.")
                     }
-                    "Sistem İzleme" -> {
-                        val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                    "Sistem" -> {
+                        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
                         val mi = ActivityManager.MemoryInfo()
                         am.getMemoryInfo(mi)
                         val stat = StatFs(Environment.getDataDirectory().path)
-                        PanelCard("Cihaz", "${Build.MANUFACTURER} ${Build.MODEL}\nAndroid ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-                        PanelCard("Bellek", "Toplam RAM: ${mi.totalMem / 1024 / 1024} MB\nKullanılabilir RAM: ${mi.availMem / 1024 / 1024} MB")
-                        PanelCard("Depolama", "Toplam: ${stat.totalBytes / 1024 / 1024 / 1024} GB\nBoş: ${stat.availableBytes / 1024 / 1024 / 1024} GB")
-                        Button(onClick = { refresh++ }, modifier = Modifier.fillMaxWidth()) { Text("Bilgileri yenile") }
+                        PanelCard("Cihaz", "${Build.MANUFACTURER} ${Build.MODEL}\nAndroid ${Build.VERSION.RELEASE} • API ${Build.VERSION.SDK_INT}")
+                        PanelCard("RAM", "Toplam: ${mi.totalMem / 1048576} MB\nKullanılabilir: ${mi.availMem / 1048576} MB")
+                        PanelCard("Depolama", "Toplam: ${stat.totalBytes / 1073741824} GB\nBoş: ${stat.availableBytes / 1073741824} GB")
+                        ActionButton("Sistem bilgilerini yenile") { refresh++ }
                     }
-                    "Görevler" -> {
-                        EditField(taskInput, { taskInput = it }, "Yeni görev...")
-                        Button(onClick = { if (taskInput.isNotBlank()) { db.add("tasks", taskInput); taskInput = ""; refresh++ } }, modifier = Modifier.fillMaxWidth()) { Text("Görev ekle") }
-                        db.rows("tasks").forEach { PanelCard("Görev", it) }
+                    "Onaylar" -> {
+                        EditField(approvalInput, { approvalInput = it }, "Onay kaydı başlığı…", 2)
+                        ActionButton("Onay isteği kaydet") {
+                            if (approvalInput.isNotBlank() && !busy) runApi("/approvals", "POST", JSONObject().put("title", approvalInput).put("detail", "Kullanıcı tarafından uygulama içinden oluşturuldu.")) { result, error ->
+                                info = if (result != null) "Onay kaydı oluşturuldu." else "İşlem başarısız: $error"
+                                if (result != null) { approvalInput = ""; refresh++ }
+                            }
+                        }
+                        approvals.forEach { PanelCard("Onay kaydı", it) }
+                        if (approvals.isEmpty()) PanelCard("Bekleyen kayıt yok", "Hassas işlemler için onay kaydı burada tutulur.")
                     }
-                    "Onay Merkezi" -> PanelCard("İşlem onayı", "Bu sürümde henüz cihaz komutu veya arka plan eylemi çalıştırılmaz. İleride hassas işlemler burada açık onayla yürütülecek.")
-                    "Evolution Engine" -> PanelCard("Kontrollü gelişim", "Şimdilik sürüm bilgisi ve yerel proje notları. Kendi kodunu değiştirme, test etme ve güncelleme otomasyonu henüz bağlı değil.")
-                    "Cloud" -> PanelCard("AYRATMA Cloud", "Bulut sunucusu henüz kurulmadı. Kimlik doğrulama ve güvenli sunucu altyapısı sonraki aşamada geliştirilecek.")
+                    "Evolution" -> {
+                        PanelCard("Evolution Engine", "Bu modül şu an güvenli geliştirme altyapısı ekranıdır; kendini gizlice değiştirmez.")
+                        PanelCard("Mevcut", "CORE API sağlık kontrolü • görev planlama • SQLite hafıza • ajan yönlendirme.")
+                        PanelCard("Sonraki entegrasyon", "Kod değişikliği önerisi → sandbox testi → kullanıcı onayı → yedek/geri alma → sürüm.")
+                        PanelCard("Otomatik güncelleme", "İmzalı sürüm doğrulaması ve kullanıcı onayı olmadan APK güncellenmez.")
+                    }
+                    "Cloud" -> {
+                        PanelCard("AYRATMA Cloud", "Bulut servisi henüz kurulmadı. Bu ekran bağlantı varmış gibi davranmaz.")
+                        PanelCard("Güvenli bulut mimarisi", "Kimlik doğrulama, şifreli aktarım, kullanıcı kontrollü senkronizasyon ve maliyet/onay sınırları.")
+                        PanelCard("Durum", "Sunucu: yapılandırılmadı • Senkronizasyon: kapalı")
+                    }
+                    "Proje Merkezi" -> {
+                        PanelCard("AI Project Builder", "Proje gereksinimlerini görevlere ayıran merkez. Kod üretimi için yerel model bağlantısı gereklidir.")
+                        EditField(taskInput, { taskInput = it }, "Örn. Android için not uygulaması oluştur…", 3)
+                        ActionButton("Proje planını oluştur") {
+                            if (taskInput.isNotBlank() && !busy) runApi("/tasks/plan", "POST", JSONObject().put("title", "PROJE: " + taskInput)) { result, error ->
+                                info = if (result != null) "Proje planı CORE görevlerine eklendi." else "Planlama başarısız: $error"
+                                if (result != null) { taskInput = ""; refresh++ }
+                            }
+                        }
+                    }
                 }
-                Text(info, color = Mint, fontSize = 12.sp)
-                Text("MADE BY AYRATMA", color = Muted, fontSize = 10.sp, modifier = Modifier.fillMaxWidth())
+                if (info != "Hazır") Text(info, color = Mint, fontSize = 11.sp)
+                Text("MADE BY AYRATMA • v0.3.0", color = Muted, fontSize = 10.sp)
             }
         }
     }
@@ -178,19 +296,34 @@ private fun AyratmaApp(db: LocalStore) {
 
 @Composable
 private fun PanelCard(title: String, body: String) {
-    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title, color = Mint, fontWeight = FontWeight.Bold)
-            Text(body, color = Color(0xFFCAD3E0), fontSize = 13.sp)
+    Card(colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(15.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(title, color = Mint, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            Text(body, color = Color(0xFFCAD3E0), fontSize = 12.sp, lineHeight = 17.sp)
         }
     }
 }
 
 @Composable
+private fun MetricCard(label: String, value: String, modifier: Modifier = Modifier) {
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = Panel), shape = RoundedCornerShape(14.dp)) {
+        Column(Modifier.padding(12.dp)) {
+            Text(value, color = Mint, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(label, color = Muted, fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun ActionButton(label: String, modifier: Modifier = Modifier, action: () -> Unit) {
+    Button(onClick = action, modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text(label, fontSize = 12.sp) }
+}
+
+@Composable
 private fun EditField(value: String, onChange: (String) -> Unit, hint: String, minLines: Int = 1) {
     Surface(color = Panel, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-        BasicTextField(value, onChange, modifier = Modifier.fillMaxWidth().padding(12.dp).heightIn(min = (minLines * 22).dp), textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 14.sp), decorationBox = { inner ->
-            if (value.isEmpty()) Text(hint, color = Muted, fontSize = 13.sp)
+        BasicTextField(value, onChange, modifier = Modifier.fillMaxWidth().padding(12.dp).heightIn(min = (minLines * 22).dp), textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 13.sp), decorationBox = { inner ->
+            if (value.isEmpty()) Text(hint, color = Muted, fontSize = 12.sp)
             inner()
         })
     }
