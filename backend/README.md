@@ -17,7 +17,8 @@ The service binds to `127.0.0.1:8765` by default. It is local-only; do not expos
 
 - `POST /chat` with `{"message":"..."}` — send a prompt to a local OpenAI-compatible llama.cpp server
 - `GET /health` — service status
-- `GET /agents` — specialist registry
+- `GET /agents` — built-in and user-created specialist registry
+- `POST /agents` with `{"name":"DESIGNER","role":"Plans accessible interface layouts"}` — persist a custom agent profile (safe name and role text only)
 - `GET /tasks` — recent planned tasks
 - `POST /tasks/plan` with `{"title":"..."}` — route a task to a specialist and store its plan
 - `GET /memory?q=...` — search saved notes
