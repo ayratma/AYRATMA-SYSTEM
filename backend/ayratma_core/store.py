@@ -14,6 +14,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS approvals(id INTEGER PRIMARY KEY, title TEXT NOT NULL, detail TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, kind TEXT NOT NULL, detail TEXT NOT NULL, created_at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS custom_agents(id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, role TEXT NOT NULL, created_at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS chat_turns(id INTEGER PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at INTEGER NOT NULL);
             """)
     def connect(self):
         db = sqlite3.connect(self.path)
@@ -53,3 +54,14 @@ class Store:
     def event(self, kind: str, detail: str):
         with self.connect() as db:
             db.execute('INSERT INTO events(kind,detail,created_at) VALUES(?,?,?)', (kind, detail[:2000], int(time.time())))
+
+    def add_chat_turn(self, role: str, content: str):
+        if role not in ('user', 'assistant'):
+            raise ValueError('invalid chat role')
+        with self.connect() as db:
+            db.execute('INSERT INTO chat_turns(role,content,created_at) VALUES(?,?,?)', (role, content[:12000], int(time.time())))
+            db.execute('DELETE FROM chat_turns WHERE id NOT IN (SELECT id FROM chat_turns ORDER BY id DESC LIMIT 80)')
+    def recent_chat(self, limit: int = 8):
+        with self.connect() as db:
+            rows = db.execute('SELECT role,content FROM chat_turns ORDER BY id DESC LIMIT ?', (limit,))
+            return [dict(r) for r in reversed(list(rows))]
