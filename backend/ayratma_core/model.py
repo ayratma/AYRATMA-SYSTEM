@@ -17,15 +17,15 @@ def _endpoint() -> str:
     return endpoint
 
 def status(timeout: float = 1.5) -> dict:
-    endpoint = _endpoint()
-    health_url = endpoint.rsplit("/v1/", 1)[0] + "/health"
-    req = Request(health_url, headers={"Accept": "application/json"})
     try:
+        endpoint = _endpoint()
+        health_url = endpoint.rsplit("/v1/", 1)[0] + "/health"
+        req = Request(health_url, headers={"Accept": "application/json"})
         with urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read(65536).decode("utf-8"))
         return {"available": True, "endpoint": endpoint, "model": data.get("model", os.environ.get("AYRATMA_MODEL_NAME", "local-model"))}
-    except (URLError, HTTPError, TimeoutError, ValueError):
-        return {"available": False, "endpoint": endpoint, "model": os.environ.get("AYRATMA_MODEL_NAME", "local-model")}
+    except (ModelUnavailable, URLError, HTTPError, TimeoutError, ValueError):
+        return {"available": False, "endpoint": DEFAULT_ENDPOINT, "model": os.environ.get("AYRATMA_MODEL_NAME", "local-model")}
 
 def chat(messages: list[dict], model: str | None = None, timeout: int = 120) -> str:
     """Call a user-started local llama.cpp OpenAI-compatible server only."""
