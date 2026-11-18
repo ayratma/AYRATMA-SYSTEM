@@ -78,6 +78,7 @@ private fun AyratmaApp() {
     var page by remember { mutableStateOf(Pages[0]) }
     var status by remember { mutableStateOf("CORE bağlantısı kontrol ediliyor…") }
     var connected by remember { mutableStateOf(false) }
+    var modelStatus by remember { mutableStateOf("Yerel model kontrol edilmedi") }
     var agents by remember { mutableStateOf(listOf<Pair<String, String>>()) }
     var tasks by remember { mutableStateOf(listOf<String>()) }
     var memory by remember { mutableStateOf(listOf<String>()) }
@@ -115,6 +116,9 @@ private fun AyratmaApp() {
         runApi("/health") { result, error ->
             connected = result != null
             status = if (result != null) "CORE bağlı • sürüm " + result.optString("version") else "CORE çevrimdışı • Termux backend başlatılmalı"
+        }
+        runApi("/model/status") { result, _ ->
+            modelStatus = if (result?.optBoolean("available") == true) "AI modeli hazır • " + result.optString("model") else "AI modeli kapalı • Termux AI kurulumunu başlat"
         }
         runApi("/agents") { result, _ ->
             if (result != null) {
@@ -197,7 +201,7 @@ private fun AyratmaApp() {
                         PanelCard("Güvenlik", "Root yok. Dosya erişimi Android dosya seçicisiyle. Kritik işlemler onay gerektirir; uygulama gizli komut çalıştırmaz.")
                     }
                     "CORE AI" -> {
-                        PanelCard("AYRATMA CORE CHAT", "Mesajlar Termux'ta çalışan yerel CORE API'ye gider. LLM için ayrıca localhost:8080 üzerinde llama.cpp sunucusu açık olmalıdır.")
+                        PanelCard("AYRATMA CORE CHAT", "Yerel model durumu: " + modelStatus + ". Mesajlar Termux CORE API üzerinden yerel modele gönderilir.")
                         EditField(chatInput, { chatInput = it }, "CORE'a mesajını yaz…", 3)
                         ActionButton(if (busy) "İşleniyor…" else "Gönder") {
                             if (chatInput.isNotBlank() && !busy) {
