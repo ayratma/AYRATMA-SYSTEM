@@ -8,7 +8,7 @@ from urllib.parse import urlparse, parse_qs
 from ayratma_core import __version__
 from ayratma_core.store import Store
 from ayratma_core.agents import AGENTS, plan_task
-from ayratma_core.model import chat as model_chat, ModelUnavailable
+from ayratma_core.model import chat as model_chat, status as model_status, ModelUnavailable
 
 store = Store(os.environ.get('AYRATMA_DB', 'data/ayratma.db'))
 MAX_BODY = 64 * 1024
@@ -35,8 +35,11 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == '/health':
             return self.send_json(200, {'ok': True, 'service': 'AYRATMA CORE', 'version': __version__})
+        if parsed.path == '/model/status':
+            return self.send_json(200, model_status())
         if parsed.path == '/agents':
-            return self.send_json(200, {'agents': [{'id': k, **v, 'kind': 'built_in'} for k, v in AGENTS.items()] + [{'id': a['name'], 'role': a['role'], 'kind': 'custom'} for a in store.custom_agents()]})
+            custom = [{'id': a['name'], 'role': a['role'], 'kind': 'custom'} for a in store.custom_agents()]
+            return self.send_json(200, {'agents': [{'id': k, **v, 'kind': 'built_in'} for k, v in AGENTS.items()] + custom})
         if parsed.path == '/tasks':
             return self.send_json(200, {'tasks': store.tasks()})
         if parsed.path == '/memory':
@@ -52,14 +55,32 @@ class Handler(BaseHTTPRequestHandler):
                 prompt = str(data.get('message', '')).strip()
                 if not prompt or len(prompt) > 12000:
                     return self.send_json(400, {'error': 'message_required_max_12000'})
-                agent = plan_task(prompt)['agent']
-                system = 'You are AYRATMA CORE. The active specialist is ' + agent + '. Be accurate, explain uncertainty, and ask before consequential actions.'
+                selected = str(data.get('agent', '')).strip()
+                routed = plan_task(prompt)['agent']
+                agent = selected if selected in AGENTS or any(a['name'] == selected for a in store.custom_agents()) else routed
+                custom = next((a for a in store.custom_agents() if a['name'] == agent), None)
+                role = custom['role'] if custom else AGENTS.get(agent, AGENTS[routed])['role']
+                memories = store.search_memory('', limit=8)
+                memory_text = '\n'.join('- ' + item['body'][:600] for item in memories)
+                history = store.recent_chat(limit=8)
+                system = (
+                    'You are AYRATMA CORE, a helpful local assistant. Reply in the user\'s language. '
+                    'The active specialist is ' + agent + '. Specialist role: ' + role + '. '
+                    'Be accurate, explain uncertainty, and never claim to have performed actions you did not perform. '
+                    'Do not execute commands or change files; propose steps and request approval for consequential actions. '
+                    'Use the saved notes only when relevant.\n\nSaved notes:\n' + (memory_text or '(none)')
+                )
+                messages = [{'role': 'system', 'content': system}]
+                messages.extend(history)
+                messages.append({'role': 'user', 'content': prompt})
                 try:
-                    answer = model_chat([{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}])
+                    answer = model_chat(messages)
+                    store.add_chat_turn('user', prompt)
+                    store.add_chat_turn('assistant', answer)
                     store.event('chat.completed', 'agent=' + agent)
-                    return self.send_json(200, {'agent': agent, 'answer': answer, 'model': 'local'})
+                    return self.send_json(200, {'agent': agent, 'answer': answer, 'model': 'local', 'memory_context_items': len(memories)})
                 except ModelUnavailable as exc:
-                    return self.send_json(503, {'error': str(exc), 'hint': 'Start a local llama.cpp server on 127.0.0.1:8080 with an OpenAI-compatible /v1/chat/completions endpoint.'})
+                    return self.send_json(503, {'error': str(exc), 'hint': 'Run backend/start_termux.sh to install the local model and start llama.cpp.'})
             if self.path == '/agents':
                 name = str(data.get('name', '')).strip()
                 role = str(data.get('role', '')).strip()
