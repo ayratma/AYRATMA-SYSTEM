@@ -106,7 +106,7 @@ private fun AyratmaApp() {
                     else done(result, null)
                 }
             } catch (e: Exception) {
-                runOnUiThread { busy = false; done(null, e.message ?: "CORE bağlantısı yok") }
+                Handler(Looper.getMainLooper()).post { busy = false; done(null, e.message ?: "CORE bağlantısı yok") }
             }
         }
     }
