@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from ayratma_core.store import Store
 from ayratma_core.agents import route_task, plan_task
-from ayratma_core.model import chat, ModelUnavailable
+from ayratma_core.model import chat, status, ModelUnavailable
 from unittest.mock import patch
 
 class CoreTests(unittest.TestCase):
@@ -30,6 +30,13 @@ class CoreTests(unittest.TestCase):
     def test_task_persistence(self):
         task_id = self.store.add_task('test task', 'ANALYST', json.dumps({'ok': True}))
         self.assertEqual(self.store.tasks()[0]['id'], task_id)
+    def test_chat_history_roundtrip(self):
+        self.store.add_chat_turn('user', 'hello')
+        self.store.add_chat_turn('assistant', 'hi')
+        self.assertEqual([x['role'] for x in self.store.recent_chat()], ['user', 'assistant'])
+    def test_model_status_is_safe_when_remote_endpoint_is_configured(self):
+        with patch.dict(os.environ, {'AYRATMA_MODEL_ENDPOINT': 'https://example.com/v1/chat/completions'}):
+            self.assertFalse(status()['available'])
 
 if __name__ == '__main__':
     unittest.main()
